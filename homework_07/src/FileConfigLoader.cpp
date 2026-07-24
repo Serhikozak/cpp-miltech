@@ -1,5 +1,6 @@
 #include "FileConfigLoader.h"
 #include <iostream>
+#include <fstream>
 
 void FileConfigLoader::load() {
     //Тут буде логіка відкриття config.json та ammo.json
