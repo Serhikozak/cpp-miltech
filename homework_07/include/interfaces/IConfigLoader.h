@@ -9,7 +9,7 @@ class IConfigLoader {
     //Повертає структуру з налаштуваннями дрона
     virtual DroneConfig getConfig() = 0;
     //Повертає структуру з параметрами боєприпасу
-    virtual AmmoParams getAmmoParams() = 0;
+    virtual AmmoParams* getAmmoParams() = 0;
 
     virtual ~IConfigLoader() = default;
 };

@@ -10,7 +10,11 @@ class JsonTargetProvider : public ITargetProvider {
 
         int getTargetCount() override;
         Coord getTarget(int index) override;
+
+        void updateTime(int stepIdx);
     private:
         int m_targetCount = 0;
-        nlohmann::json m_jsonData;
+        int m_timeStep = 0;
+        int m_currentTimeIdx = 0; //Загальний шаг часу для всіх цілей
+        nlohmann::json m_targetsJson; //Сюди зчитуєм масив цілей із файлу
 };

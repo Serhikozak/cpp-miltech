@@ -9,7 +9,7 @@ int main () {
     std::cout << "Start simulator ------" << std::endl;
     //Створюємо прості фабричні функції
     IConfigLoader* loader = createLoader(LoaderType::FILE);
-    ITargetProvider* provider = createProvider(ProviderType::JSON, "targets.json");
+    ITargetProvider* provider = createProvider(ProviderType::JSON, "data/targets.json");
     IBalisticSolver* solver = createSolver(SolverType::ANALYTICAL);
 
     //Перевірка на випадок якщо якийсь з компонентів не сторився
@@ -21,7 +21,9 @@ int main () {
 
     MissionProcessor processor(loader, provider, solver);
 
-    processor.init("config.json");
+    //processor.init("config.json");
+    processor.init();
+
     std::cout << "Simulation inicialized" << std::endl;
 
     //Головний цикл в симуляції
