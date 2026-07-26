@@ -1,155 +1,209 @@
 #pragma once
-#include "interfaces/Common.hpp"
+
 #include "interfaces/IConfigLoader.h"
 #include "interfaces/ITargetProvider.h"
 #include "interfaces/IBalisticSolver.h"
 #include "JsonTargetProvider.h"
-#include <iostream>
+#include "DroneStateManager.h"
+#include "interfaces/Common.hpp"
 #include <cmath>
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <nlohmann/json.hpp>
 
 class MissionProcessor {
-    private:
-        IConfigLoader* m_loader;
-        ITargetProvider* m_provider;
-        IBalisticSolver* m_solver;
+private:
+     IConfigLoader* m_loader;
+    ITargetProvider* m_provider;
+    IBalisticSolver* m_solver;
+    DroneStateManager m_stateManager;
 
-        int m_currentStep = 0;
-        int m_totalStep = 0;
-        float m_currentTime = 0.0f;
+    int m_currentStep = 0;
+    int m_totalStep = 60;
+    const int MAX_STEPS = 10000;
+    float m_currentTime = 0.0f;
+    bool m_isDropped = false;
 
-        Coord interpolateTarget(int targetIdx, int timeSteps,
-                        float t, float arrayTimeStep) {
-            int idx  = (int)std::floor(t / arrayTimeStep) % timeSteps;
-            int next = (idx + 1) % timeSteps;
-            float frac = (t / arrayTimeStep) - std::floor(t / arrayTimeStep);
+    // Вихідні масиви для збереження історії польоту
+    std::vector<float> m_historyX;
+    std::vector<float> m_historyY;
+    std::vector<float> m_historyDir;
+    std::vector<int> m_historyState;
+    std::vector<int> m_historyTargetIdx;
 
-            Coord currentPos = m_provider->getTarget(idx);
-            Coord nextPos = m_provider->getTarget(next);
+    // Внутрішня функція інтерполяції (Lead Targeting)
+    Coord interpolateTarget(int targetIdx, int timeSteps, float t, float arrayTimeStep) {
+        int idx = (int)std::floor(t / arrayTimeStep) % timeSteps;
+        int next = (idx + 1) % timeSteps;
+        float frac = (t / arrayTimeStep) - std::floor(t / arrayTimeStep);
 
-            return currentPos + (nextPos - currentPos) * frac;
+        auto jsonProvider = dynamic_cast<JsonTargetProvider*>(m_provider);
+        if (!jsonProvider) return Coord{0.0, 0.0};
 
-            //return targets[targetIdx][idx]
-                //+ (targets[targetIdx][next] - targets[targetIdx][idx]) * frac;
-        }
+        jsonProvider->updateTime(idx);
+        Coord currentPos = m_provider->getTarget(targetIdx);
 
-        Coord extrapolateTarget(int targetIdx, int timeSteps,
-                                float currentTime, float dt, float arrayTimeStep) {
-            int idx  = (int)std::floor(currentTime / arrayTimeStep) % timeSteps;
-            int next = (idx + 1) % timeSteps;
+        jsonProvider->updateTime(next);
+        Coord nextPos = m_provider->getTarget(targetIdx);
 
-            Coord currentPos = m_provider->getTarget(idx);
-            Coord nextPos = m_provider->getTarget(next);
-
-            //Coord vel = (targets[targetIdx][next] - targets[targetIdx][idx]) / arrayTimeStep;
-            Coord vel = (nextPos - currentPos) / arrayTimeStep;
-            Coord cur = interpolateTarget(targetIdx, timeSteps, currentTime, arrayTimeStep);
-
-            return cur + vel * dt;
-        }
-    
-    public:
-        //Конструктор(паттерн) приймаємо інтерфейси через вказівники
-        MissionProcessor(IConfigLoader* loader, ITargetProvider* provider, IBalisticSolver* solver)
-        : m_loader(loader), m_provider(provider), m_solver(solver),
-          m_currentStep(0), m_totalStep(60), m_currentTime(0.0f) {}
-
-        ~MissionProcessor() = default;
-
-        void init(const char* configSourse = nullptr) {
-            m_currentStep = 0;
-            m_currentTime = 0.0f;
-            if (m_loader != nullptr) {
-                m_loader -> load(); //Тут IConfigLoader зчитує config.json nf ammo.json
-            }
-
-                //if (m_provider !=nullptr) {
-                m_totalStep = 60;
-
-                //}
-            }
-        
-        
-    //Метод hasNext перевіряє чи не закінчились кроки симуляції
-        bool hasNext() {
-            return m_currentStep < m_totalStep;
-
-        }
-        //Обробити наступний крок часу з вибором однієї Наайближчої цілі(Lead Targeting)
-        void step() {
-            if (!hasNext()) return;
-            std::cout << "Executing step " << m_currentStep << "..." << std::endl;
-            //Отримуємо параметри конфігурації та боєприпасу від лоадера
-            if (m_loader != nullptr && m_provider != nullptr && m_solver != nullptr) {
-                DroneConfig config = m_loader->getConfig();
-                AmmoParams* ammo = m_loader->getAmmoParams();
-
-                //Крок часу симуляції беремо з конфігу (sinTimeStep = 0.1)
-                //float dt = config.simTimeStep;
-                float arrayTimeStep = config.arrayTimeStep;
-                //int timeSteps = 60;
-
-                //Синхронізуємо крок часу симуляції з провайдером
-                auto jsonProvider = dynamic_cast< JsonTargetProvider*>(m_provider);
-                if (jsonProvider) {
-                    jsonProvider->updateTime(m_currentStep);
-                }
-
-                //Отримуємо поточну позицію першої цілі
-                int targetCount = m_provider->getTargetCount();
-                int bestTargetIdx = -1;
-                float minTimeToHit = 99999.0f;
-                Coord bestTargetPos{0.0, 0.0};
-
-                //Алгоритм випередження. Перебираємо всі цілі і шукаємо ближчу за часом
-                for (int i = 0; i < targetCount; ++i) {
-                    Coord predictedPos = interpolateTarget(i, m_totalStep, m_currentTime, arrayTimeStep);
-
-                    float dx = predictedPos.x - config.startPos.x;
-                    float dy = predictedPos.y - config.startPos.y;
-                    float distance = std::sqrt(dx * dx + dy * dy);
-
-                    float timeToHit = distance / config.attackSpeed;
-
-                    if (timeToHit < minTimeToHit) {
-                        minTimeToHit = timeToHit;
-                        bestTargetIdx = i;
-                        bestTargetPos = predictedPos;
-                        
-                    }
-                
-                //m_solver->solve(config, ammo[0], exactTargetPos);
-                }
-
-                if (bestTargetIdx != -1) {
-                    std::cout << "[Target Selected] Ціль ID: " << bestTargetIdx
-                              << " | Упередження: (" << bestTargetPos.x << ", " << bestTargetPos.y << ")" << std::endl;
-                    m_solver->solve(config, ammo[0], bestTargetPos);
-                }
-        }
-        m_currentStep++;
-        if (m_loader != nullptr) {
-            m_currentTime += m_loader -> getConfig().simTimeStep;
-        }
-        else {
-            m_currentTime += 0.1f;
-        }
+        return currentPos + (nextPos - currentPos) * frac;
     }
 
-    void reset() {
+    // Нова функція запису у ПРАВИЛЬНИЙ структурований simulation.json
+    void writeSimulationFile() {
+        std::ofstream fout("simulation.json");
+        if (!fout.is_open()) {
+            std::cerr << "Помилка: Не вдалося створити файл simulation.json" << std::endl;
+            return;
+        }
+
+        nlohmann::json outputJson;
+        int N = m_historyDir.size();
+
+        outputJson["steps_count"] = N;
+
+        // Формуємо масив об'єктів для кожного кроку часу (телеметрію)
+        nlohmann::json telemetryArray = nlohmann::json::array();
+        for (int i = 0; i < N; ++i) {
+            nlohmann::json stepData;
+            stepData["step_index"] = i;
+            
+            // Групуємо координати в акуратний підоб'єкт
+            stepData["position"] = {
+                {"x", m_historyX[i]},
+                {"y", m_historyY[i]}
+            };
+
+            stepData["direction_rad"] = m_historyDir[i];
+            stepData["drone_state"]   = m_historyState[i];
+            stepData["target_index"]  = m_historyTargetIdx[i];
+
+            telemetryArray.push_back(stepData);
+        }
+
+        outputJson["telemetry"] = telemetryArray;
+
+        // Записуємо у файл із красивими відступами в 4 пробіли
+        fout << outputJson.dump(4);
+        fout.close();
+
+        std::cout << "[File] Телеметрія місії успішно збережена у красивий simulation.json" << std::endl;
+    }
+
+public:
+    // Конструктор
+    MissionProcessor(IConfigLoader* loader, ITargetProvider* provider, IBalisticSolver* solver)
+        : m_loader(loader), m_provider(provider), m_solver(solver), 
+          m_currentStep(0), m_currentTime(0.0f), m_isDropped(false) {}
+
+    ~MissionProcessor() = default;
+
+    // Метод ініціалізації
+    void init(const char* configSource = nullptr) {
         m_currentStep = 0;
-        m_currentTime =0.0f;
-    }
+        m_currentTime = 0.0f;
+        m_isDropped = false;
 
-    void changeSolver(IBalisticSolver* s) {
-        if (s != nullptr) {
-            std::cout << "[Strategy] Зміна балістичног солвера на льоту" << std::endl;
-            m_solver = s;
+        if (m_loader != nullptr) {
+            m_loader->load();
+            m_stateManager.init(m_loader->getConfig());
+        }
+
+        m_historyX.clear(); 
+        m_historyY.clear();
+        m_historyDir.clear(); 
+        m_historyState.clear();
+        m_historyTargetIdx.clear();
+    }
+    // Перевірка наявності наступного кроку
+    bool hasNext() {
+        return !m_isDropped && m_currentStep < MAX_STEPS;
+    }
+    // Головний метод кроку симуляції
+    void step() {
+        if (!hasNext()) return;
+
+        DroneConfig config = m_loader->getConfig();
+        AmmoParams* ammo = m_loader->getAmmoParams();
+        float arrayTimeStep = config.arrayTimeStep;
+        float dt = config.simTimeStep;
+
+        int currentStepIdx = (int)std::floor(m_currentTime / arrayTimeStep) % m_totalStep;
+        auto jsonProvider = dynamic_cast<JsonTargetProvider*>(m_provider);
+        if (jsonProvider) {
+            jsonProvider->updateTime(currentStepIdx);
+        }
+
+        int targetCount = m_provider->getTargetCount();
+        int bestTargetIdx = -1;
+        float minTimeToHit = 999999.0f;
+        Coord bestTargetPos{0.0, 0.0};
+
+        // Алгоритм Lead Targeting: пошук найближчої за часом цілі
+        for (int i = 0; i < targetCount; ++i) {
+            Coord predictedPos = interpolateTarget(i, m_totalStep, m_currentTime, arrayTimeStep);
+            
+            float dx = predictedPos.x - m_stateManager.getX();
+            float dy = predictedPos.y - m_stateManager.getY();
+            float distance = std::sqrt(dx * dx + dy * dy);
+            float timeToHit = distance / config.attackSpeed;
+
+            if (timeToHit < minTimeToHit) {
+                minTimeToHit = timeToHit;
+                bestTargetIdx = i;
+                bestTargetPos = predictedPos;
+            }
+        }
+
+        if (bestTargetIdx != -1) {
+            // Оновлюємо фізику та стани автомата в менеджері
+            m_stateManager.update(bestTargetPos, config, dt);
+
+            // Перевірка досягнення радіуса скидання
+            float finalDx = bestTargetPos.x - m_stateManager.getX();
+            float finalDy = bestTargetPos.y - m_stateManager.getY();
+            float finalDistance = std::sqrt(finalDx * finalDx + finalDy * finalDy);
+
+            if (finalDistance <= config.hitRadius) {
+                m_stateManager.forceState(DROPPED);
+                m_isDropped = true;
+            }
+        }
+
+        // Записуємо дані у вихідні масиви історії
+        m_historyX.push_back(m_stateManager.getX());
+        m_historyY.push_back(m_stateManager.getY());
+        m_historyDir.push_back(m_stateManager.getDir());
+        m_historyState.push_back((int)m_stateManager.getState());
+        m_historyTargetIdx.push_back(bestTargetIdx);
+
+        // Викликаємо стратегію балістичного солвера
+        if (bestTargetIdx != -1) {
+            m_solver->solve(config, ammo[0], bestTargetPos);
+        }
+
+        m_currentStep++;
+        m_currentTime += dt;
+
+        // Коли скинули або досягли ліміту — зберігаємо красивий JSON
+        if (m_isDropped || m_currentStep >= MAX_STEPS) {
+            writeSimulationFile();
         }
     }
-
-    int getCurrentStep() const {
-        return m_currentStep;
+    void reset() { init(); }
+    
+    void changeSolver(IBalisticSolver* s) { 
+        if (s != nullptr) m_solver = s; 
     }
-
-        
+    
+    int getCurrentStep() const { return m_currentStep; }
 };
+
+
+
+
+
+
+
+

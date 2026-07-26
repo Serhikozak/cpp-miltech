@@ -50,3 +50,11 @@ struct SimStep
     Coord aimPoint;     // куди впаде бомба якщо скинути зараз
     Coord predictedTarget; // прогнозована позиція цілі
 };
+
+enum DroneState {
+    STOPPED = 0,
+    ACCELERATING = 1,
+    MOVING = 2,
+    TURNING = 3,
+    DROPPED = 4
+};
