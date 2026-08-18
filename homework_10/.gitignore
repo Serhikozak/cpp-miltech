@@ -1,0 +1,7 @@
+data
+compile_commands.json
+nlohmann/
+simulation.json
+CMakeFiles/
+CMakeCache.txt
+build
