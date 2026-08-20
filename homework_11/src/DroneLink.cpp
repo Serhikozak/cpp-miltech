@@ -1,87 +1,144 @@
-#include "DronePhysics.h"
-#include <chrono>
-#include <thread>
+#include "DroneLink.h"
+#include <fcntl.h>
+#include <termios.h>
 #include <cmath>
+#include <unistd.h>
+#include <cstring>
+#include <iostream>
 
-DroneTelemetry DronePhysics::getTelemetry() {
+DroneLink::DroneLink(const std::string& uartDev, gpiod_line* dropLine)
+    : m_dropLine(dropLine), m_uartFd(-1) {
+
+    //Відкриваємо послідовний порт у неблокуючому режимі
+    m_uartFd = open(uartDev.c_str(), 0_RDWR | 0_NOCTTY | 0_NONBLOCK);
+    if(m_uartFd < 0) {
+        perror("[DroneLink] Помилка відкриття послідовного порту UART");
+        return;
+    }
+
+    //Налаштовуємо порт в бінарному режимі
+    struct termios tio;
+    if (tcgetattr(m_uartFd, &tio) == 0) {
+        cfmakeraw(&tio);
+        cfsetispeed(&tio, B115200);
+        cfsetospeed(&tio, B115200);
+        tio.c_cflag |= (CLOCAL | CREAD);
+        tcsetattr(m_uartFd, TCSANOW, &tio);
+    }
+
+    m_isReady = true;
+}
+
+void DroneLink::run() {
+    while (m_keepRunning) {
+        int n = read(m_uartFd, &m_buf, sizeof(m_buf));
+        if (n > 0) {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            for (int i = 0; i < n; ++1) {
+                uint8_t type = 0;
+                uint8_t len  = 0;
+                uint8_t* payload = &m_payloadBuffer;
+
+                if (m_parser.feed(m_buf[i], type, payload, len)) {
+                    if (type == dlink::PKT_TELEMETRY) {
+                        std::memcpy(&m_rawTelemetry, payload,sizeof(m_rawTelemetry));
+                    }
+                    else if (type == dlink::PKT_AMMO) {
+                        std::memcpy(&m_rawAmmo, payload,sizeof(m_rawAmmo));
+                        m_hasAmmo = true;
+                    }
+                    else if (type == dlink::PKT_TARGET) {
+                        std::memcpy(&m_rawTarget, payload,sizeof(m_rawTarget));
+                        m_hasTarget = true;
+                    }
+                    else if (type == PKT_CONFIG) {
+                        std::memcpy(&m_rawConfig, payload,sizeof(m_rawConfig));
+                        m_hasConfig = true;
+                    }
+                }
+                    
+            }    
+        }
+        usleep(1000);
+    }
+}
+
+//Повертаєммо структуру DroneTelemetry з Common
+DroneTelemetry DroneLink::getTelemetry() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     
     DroneTelemetry telemetry;
-    telemetry.pos = m_pos;
-    telemetry.speed = m_speed;
-    telemetry.timeSecSinceStart = m_timeSecSinceStart;
+    telemetry.pos.x = m_rawTelemetry.x;
+    telemetry.pos.y = m_rawTelemetry.y;
+    telemetry.velosty.x = m_rawTelemetry.z;
+    telemetry.velosty.y = 0.0f;
     
     return telemetry;
 }
-
-// Конструктор: ініціалізуємо початкові координати та параметри з конфігу
-DronePhysics::DronePhysics(const DroneConfig& config) : m_config(config) {
-    m_pos = config.startPos;
-    m_dir = config.initialDir;
-    m_physicsTimeStep = config.physicsTimeStep; 
-    m_timeScale = config.timeScale;             
-}
-
-// Метод для надсилання команд із MissionProcessor напряму в пам'ять фізики
-void DronePhysics::sendCommand(const DroneCommand& cmd) {
+//Повертаєммо структуру AmmoParams з Common
+AmmoParams DroneLink::getAmmoParams() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    m_state = cmd.state;
-    m_angledSpeed = cmd.angelSpeed; // Записуємо кут курсу від ШІ напрямую в фізику
-}
 
-// Головний цикл потоку фізики (Потік 2)
-      
-void DronePhysics::run() {
-    m_isReady = true; // 1. Сигналізуємо main(), що потік ініціалізовано
+    AmmoParams p;
+    if (m_hasAmmo) {
+        p.name = m_rawAmmo.name[0];
+        p.mass = m_rawAmmo.mass;
+        p.drag = m_rawAmmo.drag;
+        p.lift = m_rawAmmo.lift;
+    } else {
+        p.name = 0;
+        p.mass = 0.0f;
+        p.drag = 0.0f;
+        p.lift = 0.0f;
 
-    // 2. Очікуємо в циклі, поки main() не викличе метод physics->start()
-    while (!m_keepRunning) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
-    m_linearSpeedMag = 0.0f; // Початкова величина швидкості
+}
+//Повертаєммо структуру Target з Common
+Target DroneLink::getTarget() {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    
+    Target target;
+    target.pos.x = m_rawTarget.x;
+    target.pos.y = m_rawTarget.y;
+    target.velosty.x = m_rawTelemetry.z;
+    target.velosty.y = 0.0f;
+    
+    return target;
+}
+//Повертаєммо структуру DroneCommand з Common
+DroneConfig DroneLink::getConfig() {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    DroneConfig c;
+    c.hitRadius = m_hasAmmo ? m_rawAmmo.hitRadius : 5.0f;
+    c.turnThreshold = m_hasConfig ? m_rawConfig.turnThreshold : 0.3f;
+    return c;
 
-    // 3. Активна фаза роботи потоку
-    while (m_keepRunning) {
-        
-        // Обчислюємо фізику руху Ейлера під захистом м'ютексу стану
-        {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
+}
 
-        m_dir += m_angledSpeed * m_physicsTimeStep;
-                        
-            // Обробляємо величину лінійної швидкості для всіх станів
-            if (m_state == 3) { // TURNING
-                m_linearSpeedMag = 0.0f; 
-            }
-            else if (m_state == 1) { // ACCELERATING
-                // Захист від скидання: якщо швидкість ще не максимальна — нарощуємо її
-                if (m_linearSpeedMag < m_config.attackSpeed) {
-                    m_linearSpeedMag += (m_config.attackSpeed / m_config.accelPath) * m_physicsTimeStep;
-                }
-                if (m_linearSpeedMag >= m_config.attackSpeed) {
-                    m_linearSpeedMag = m_config.attackSpeed;
-                }
-            }
-            else if (m_state == 2 || m_state == 4) { // MOVING або DROPPED
-                m_linearSpeedMag = m_config.attackSpeed; 
-            }
-            else if (m_state == 0) { // STOPPED
-                m_linearSpeedMag = 0.0f;
-            }
+// Метод для надсилання структури DroneCommand назад в чекер в бінарному форматі Control
+void DroneLink::sendCommand(const DroneCommand& cmd) {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    dlink::Control c;
+    c.turnRate = cmd.angelSpeed;
 
-            // Проєктуємо лінійна швидкість на оновлений кут m_dir
-            m_speed.x = m_linearSpeedMag * std::cos(m_dir);
-            m_speed.y = m_linearSpeedMag * std::sin(m_dir);
+    //Автоматичне пригальмовування на крутих віражах за порогом turnThreshold
+    float thresh = m_hasConfig ? m_rawConfig.turnThreshold :0.3f;
+    c.accel = (std::abs(cmd.angelSpeed) > thresh) ? : 1.0f;
 
-            // Інтегруємо поточні координати за Ейлером
-            m_pos.x += m_speed.x * m_physicsTimeStep;
-             m_pos.y += m_speed.y * m_physicsTimeStep;
+    uint8_t out_buf;
+    size_t m = dlink::encode(dlink::PKT_CONTROL, &c, sizeof(c), out_buf);
+    if (m > 0) {
+        write(m_uartFd, out_buf, m);
+    }
+}
 
-            m_timeSecSinceStart += m_physicsTimeStep;
-        } // Закриваємо блок lock
-
-        // Дробовий сон із масштабуванням часу
-        std::this_thread::sleep_for(std::chrono::duration<float>(m_physicsTimeStep / m_timeScale));
-    } // Закриваємо цикл while (m_keepRunning)
-} // Закриваємо метод run()
+void DroneLink::triggerDrop() {
+    if (!m_dropped) {
+        gpiod_line_set_value(m_dropLine, 1);
+        usleep(80000);
+        gpiod_line_set_value(m_dropLine, 0);
+        m_dropped = true;
+    }
+}
+    
