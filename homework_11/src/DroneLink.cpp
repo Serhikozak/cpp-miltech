@@ -10,7 +10,7 @@ DroneLink::DroneLink(const std::string& uartDev, gpiod_line* dropLine)
     : m_dropLine(dropLine), m_uartFd(-1) {
 
     //Відкриваємо послідовний порт у неблокуючому режимі
-    m_uartFd = open(uartDev.c_str(), 0_RDWR | 0_NOCTTY | 0_NONBLOCK);
+    m_uartFd = open(uartDev.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if(m_uartFd < 0) {
         perror("[DroneLink] Помилка відкриття послідовного порту UART");
         return;
@@ -34,12 +34,12 @@ void DroneLink::run() {
         int n = read(m_uartFd, &m_buf, sizeof(m_buf));
         if (n > 0) {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            for (int i = 0; i < n; ++1) {
+            for (int i = 0; i < n; ++i) {
                 uint8_t type = 0;
                 uint8_t len  = 0;
-                uint8_t* payload = &m_payloadBuffer;
+                uint8_t* payload = m_payloadBuffer;
 
-                if (m_parser.feed(m_buf[i], type, payload, len)) {
+                if (m_parser.feed(m_buf, type, payload, len)) {
                     if (type == dlink::PKT_TELEMETRY) {
                         std::memcpy(&m_rawTelemetry, payload,sizeof(m_rawTelemetry));
                     }
@@ -51,7 +51,7 @@ void DroneLink::run() {
                         std::memcpy(&m_rawTarget, payload,sizeof(m_rawTarget));
                         m_hasTarget = true;
                     }
-                    else if (type == PKT_CONFIG) {
+                    else if (type == dlink::PKT_CONFIG) {
                         std::memcpy(&m_rawConfig, payload,sizeof(m_rawConfig));
                         m_hasConfig = true;
                     }
@@ -70,9 +70,9 @@ DroneTelemetry DroneLink::getTelemetry() {
     DroneTelemetry telemetry;
     telemetry.pos.x = m_rawTelemetry.x;
     telemetry.pos.y = m_rawTelemetry.y;
-    telemetry.velosty.x = m_rawTelemetry.z;
-    telemetry.velosty.y = 0.0f;
-    
+    telemetry.speed.x = m_rawTelemetry.z;
+    telemetry.speed.y = 0.0f;
+        
     return telemetry;
 }
 //Повертаєммо структуру AmmoParams з Common
@@ -81,18 +81,18 @@ AmmoParams DroneLink::getAmmoParams() {
 
     AmmoParams p;
     if (m_hasAmmo) {
-        p.name = m_rawAmmo.name[0];
+        std::strncpy(p.name, m_rawAmmo.name, 32);
         p.mass = m_rawAmmo.mass;
         p.drag = m_rawAmmo.drag;
         p.lift = m_rawAmmo.lift;
     } else {
-        p.name = 0;
+        std::memset(p.name, 0, sizeof(p.name));
         p.mass = 0.0f;
         p.drag = 0.0f;
         p.lift = 0.0f;
 
     }
-
+    return p;
 }
 //Повертаєммо структуру Target з Common
 Target DroneLink::getTarget() {
@@ -101,8 +101,8 @@ Target DroneLink::getTarget() {
     Target target;
     target.pos.x = m_rawTarget.x;
     target.pos.y = m_rawTarget.y;
-    target.velosty.x = m_rawTelemetry.z;
-    target.velosty.y = 0.0f;
+    target.velocity.x = m_rawTelemetry.z;
+    target.velocity.y = 0.0f;
     
     return target;
 }
@@ -124,9 +124,9 @@ void DroneLink::sendCommand(const DroneCommand& cmd) {
 
     //Автоматичне пригальмовування на крутих віражах за порогом turnThreshold
     float thresh = m_hasConfig ? m_rawConfig.turnThreshold :0.3f;
-    c.accel = (std::abs(cmd.angelSpeed) > thresh) ? : 1.0f;
+    c.accel = (std::abs(cmd.angelSpeed) > thresh) ? -0.3f : 1.0f;
 
-    uint8_t out_buf;
+    uint8_t out_buf[512];
     size_t m = dlink::encode(dlink::PKT_CONTROL, &c, sizeof(c), out_buf);
     if (m > 0) {
         write(m_uartFd, out_buf, m);

@@ -8,9 +8,9 @@
 
 MissionProcessor::MissionProcessor(std::shared_ptr<DroneLink> droneLink, 
                                    std::unique_ptr<IBalisticSolver> solver)
-    : m_droneLink(droneLink), m_ballisticSolver(std::move(solver)) {
+    : m_droneLink(droneLink), m_balisticSolver(std::move(solver)) {
     
-    m_keeprunning = true;
+    m_keepRunning = true;
     
 }
 
@@ -38,7 +38,7 @@ void MissionProcessor::run() {
         float targetDir = std::atan2(target.pos.y - telemetry.pos.y, target.pos.x - telemetry.pos.x);
         
         // Поточний курс (передали dir через поле timeSecsSinceStart в DroneLink)
-        float currentDir = telemetry.timeSecsSinceStart; 
+        float currentDir = telemetry.timeSecSinceStart; 
 
         float angle_error = targetDir - currentDir;
         while (angle_error > M_PI)  angle_error -= 2.0f * M_PI;
@@ -52,18 +52,18 @@ void MissionProcessor::run() {
         if (cmd.angelSpeed > 1.0f)  cmd.angelSpeed = 1.0f;
         if (cmd.angelSpeed < -1.0f) cmd.angelSpeed = -1.0f;
 
-        // Отправляем сформированную команду обратно в чекер через UART
+        // Відправляєм сформовану команду обратно в чекер через UART
         m_droneLink->sendCommand(cmd);
 
         // 2. БАЛІСТИЧНИЙ РОЗРАХУНОК СКИДУ
         float speed_total = std::hypot(telemetry.speed.x, telemetry.speed.y);
         
         // Викликаємо AnalyticalSolver через інтерфейс IBalisticSolver
-        float t_fall = m_ballisticSolver->calcTimeOfFlight(currentZ, speed_total, ammo.mass, ammo.drag, ammo.lift);
+        float t_fall = m_balisticSolver->calcTimeOfFlight(currentZ, speed_total, ammo.mass, ammo.drag, ammo.lift);
 
         // Розрахунок зміщення drop point (Полsном Тейлора 5-й степени внутрs AnalyticalSolver)
-        float dropDistX = m_ballisticSolver->calcHDistance(t_fall, telemetry.speed.x, ammo.mass, ammo.drag, ammo.lift);
-        float dropDistY = m_ballisticSolver->calcHDistance(t_fall, telemetry.speed.y, ammo.mass, ammo.drag, ammo.lift);
+        float dropDistX = m_balisticSolver->calcHDistance(t_fall, telemetry.speed.x, ammo.mass, ammo.drag, ammo.lift);
+        float dropDistY = m_balisticSolver->calcHDistance(t_fall, telemetry.speed.y, ammo.mass, ammo.drag, ammo.lift);
 
         float impact_x = telemetry.pos.x + dropDistX;
         float impact_y = telemetry.pos.y + dropDistY;

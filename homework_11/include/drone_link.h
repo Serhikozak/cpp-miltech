@@ -146,7 +146,7 @@ struct Parser {
     bool feed(uint8_t byte, uint8_t& outType, uint8_t* outPayload, uint8_t& outLen) {
         switch (st) {
         case S_M0: if (byte == MAGIC0) st = S_M1; break;
-        case S_M1: st = (byte == MAGIC1) ? S_TYPE : S_M``0; break;
+        case S_M1: st = (byte == MAGIC1) ? S_TYPE : S_M0; break;
         case S_TYPE: type = byte; st = S_LEN; break;
         case S_LEN:  len = byte; idx = 0; st = len ? S_PAYLOAD : S_CRC0; break;
         case S_PAYLOAD:

@@ -1,10 +1,12 @@
 #pragma once
 #include "interfaces/Common.hpp"
 #include "interfaces/IBalisticSolver.h"
+#include <cmath>
 
 class AnalyticalSolver : public IBalisticSolver {
-    private:
-        float calcTimeOfFlight(float Z0, float V0, float m, float d, float l) {
+    
+    public:
+    float calcTimeOfFlight(float Z0, float V0, float m, float d, float l) override {
     float a = d * 9.81f * m - 2 * d * d * l * V0;
     float b = -3 * 9.81f * m * m + 3 * d * l * m * V0;
     float c = 6 * m * m * Z0;
@@ -27,7 +29,7 @@ class AnalyticalSolver : public IBalisticSolver {
     return t > 0 ? t : std::sqrt(2.0f * Z0 / 9.81f);
 }
 
-    float calcHDistance(float t, float V0, float m, float d, float l) {
+    float calcHDistance(float t, float V0, float m, float d, float l) override {
     float l2 = l * l;
     float l4 = l2 * l2;
 
@@ -43,9 +45,9 @@ class AnalyticalSolver : public IBalisticSolver {
            - 3 * std::pow(d, 4) * l2 * (1 + l2) * V0))
           / (36 * (1 + l2) * std::pow(m, 4));
 }
-    public:
-        AnalyticalSolver() = default;
-        ~AnalyticalSolver() override = default;
+    //public:
+        //AnalyticalSolver() = default;
+        //~AnalyticalSolver() override = default;
 
-        void solve(const DroneConfig& config, const AmmoParams& ammo, const Coord&targetPos);
+        
 };

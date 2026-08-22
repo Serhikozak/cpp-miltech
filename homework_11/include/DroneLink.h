@@ -34,7 +34,7 @@ private:
 
 public:
     DroneLink(const std::string& uartDev, gpiod_line* dropLine);
-    ~DroneLink();
+    ~DroneLink() = default;
 
     // Головний метод потоку, який викликається в main()
     void run();
