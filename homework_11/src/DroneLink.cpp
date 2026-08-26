@@ -42,6 +42,7 @@ void DroneLink::run() {
                 if (m_parser.feed(m_buf, type, payload, len)) {
                     if (type == dlink::PKT_TELEMETRY) {
                         std::memcpy(&m_rawTelemetry, payload,sizeof(m_rawTelemetry));
+                        m_dataUpdated = true;
                     }
                     else if (type == dlink::PKT_AMMO) {
                         std::memcpy(&m_rawAmmo, payload,sizeof(m_rawAmmo));
@@ -70,9 +71,12 @@ DroneTelemetry DroneLink::getTelemetry() {
     DroneTelemetry telemetry;
     telemetry.pos.x = m_rawTelemetry.x;
     telemetry.pos.y = m_rawTelemetry.y;
-    telemetry.speed.x = m_rawTelemetry.z;
-    telemetry.speed.y = 0.0f;
-        
+    telemetry.speed.x = m_rawTelemetry.vx;
+    telemetry.speed.y = m_rawTelemetry.vx;
+    //telemetry.z = m_rawTelemetry.z;                  // Висота польоту
+    //telemetry.dir = m_rawTelemetry.dir;             // Курс польоту
+    telemetry.timeSecSinceStart = static_cast<float>(m_rawTelemetry.t_ms) / 1000.0f;
+    m_dataUpdated = false;   
     return telemetry;
 }
 //Повертаєммо структуру AmmoParams з Common
@@ -81,7 +85,7 @@ AmmoParams DroneLink::getAmmoParams() {
 
     AmmoParams p;
     if (m_hasAmmo) {
-        std::strncpy(p.name, m_rawAmmo.name, 32);
+        std::strncpy(p.name, m_rawAmmo.name, 16);
         p.mass = m_rawAmmo.mass;
         p.drag = m_rawAmmo.drag;
         p.lift = m_rawAmmo.lift;
@@ -123,10 +127,10 @@ void DroneLink::sendCommand(const DroneCommand& cmd) {
     c.turnRate = cmd.angelSpeed;
 
     //Автоматичне пригальмовування на крутих віражах за порогом turnThreshold
-    float thresh = m_hasConfig ? m_rawConfig.turnThreshold :0.3f;
-    c.accel = (std::abs(cmd.angelSpeed) > thresh) ? -0.3f : 1.0f;
-
-    uint8_t out_buf[512];
+    //float thresh = m_hasConfig ? m_rawConfig.turnThreshold :0.3f;
+    //c.accel = (std::abs(cmd.angelSpeed) > thresh) ? -0.3f : 1.0f;
+    c.accel = 1.0f;
+    uint8_t out_buf[64];
     size_t m = dlink::encode(dlink::PKT_CONTROL, &c, sizeof(c), out_buf);
     if (m > 0) {
         write(m_uartFd, out_buf, m);

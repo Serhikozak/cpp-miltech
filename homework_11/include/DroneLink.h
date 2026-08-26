@@ -26,6 +26,7 @@ private:
     dlink::Parser m_parser{};
     uint8_t m_buf = 0;
     uint8_t m_payloadBuffer[512];
+    bool m_dataUpdated = false;
 
     mutable std::mutex m_stateMutex;
     // Атомарні прапорці життєвого циклу
@@ -54,4 +55,9 @@ public:
     void sendCommand(const DroneCommand& cmd);
     void triggerDrop();
     bool isDropped() const { return m_dropped; }
+
+    bool isDataUpdated() { 
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        return m_dataUpdated; 
+    }
 };
