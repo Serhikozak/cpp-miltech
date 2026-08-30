@@ -6,10 +6,17 @@
 #include <cstring>
 #include <iostream>
 
+#ifndef SQL_USING_GPIOD
+#define SQL_USING_GPIOD
+extern "C" {
+    #include <gpiod.h>    
+}
+#endif
+
 DroneLink::DroneLink(const std::string& uartDev, gpiod_line* dropLine)
     : m_dropLine(dropLine), m_uartFd(-1) {
 
-    //Відкриваємо послідовний порт у неблокуючому режимі
+    //Відкриваємо послідовний порт у неблокуючому режимі (Raw Mode)
     m_uartFd = open(uartDev.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if(m_uartFd < 0) {
         perror("[DroneLink] Помилка відкриття послідовного порту UART");
@@ -28,39 +35,39 @@ DroneLink::DroneLink(const std::string& uartDev, gpiod_line* dropLine)
 
     m_isReady = true;
 }
-
+// Потік 1: Безперервне вичитування бінарного протоколу UART
 void DroneLink::run() {
+    uint8_t single_byte; // Чисте побайтове зчитування для стабільності парсера
     while (m_keepRunning) {
-        int n = read(m_uartFd, &m_buf, sizeof(m_buf));
+        int n = read(m_uartFd, &single_byte, 1);
         if (n > 0) {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            for (int i = 0; i < n; ++i) {
-                uint8_t type = 0;
-                uint8_t len  = 0;
-                uint8_t* payload = m_payloadBuffer;
+            uint8_t type = 0;
+            uint8_t len  = 0;
+            uint8_t* payload = m_payloadBuffer;
 
-                if (m_parser.feed(m_buf, type, payload, len)) {
-                    if (type == dlink::PKT_TELEMETRY) {
-                        std::memcpy(&m_rawTelemetry, payload,sizeof(m_rawTelemetry));
-                        m_dataUpdated = true;
-                    }
-                    else if (type == dlink::PKT_AMMO) {
-                        std::memcpy(&m_rawAmmo, payload,sizeof(m_rawAmmo));
-                        m_hasAmmo = true;
-                    }
-                    else if (type == dlink::PKT_TARGET) {
-                        std::memcpy(&m_rawTarget, payload,sizeof(m_rawTarget));
-                        m_hasTarget = true;
-                    }
-                    else if (type == dlink::PKT_CONFIG) {
-                        std::memcpy(&m_rawConfig, payload,sizeof(m_rawConfig));
-                        m_hasConfig = true;
-                    }
+            if (m_parser.feed(single_byte, type, payload, len)) {
+                if (type == dlink::PKT_TELEMETRY) {
+                    std::memcpy(&m_rawTelemetry, payload,sizeof(m_rawTelemetry));
+                    m_dataUpdated = true;// Тригер для початку кроку обчислень ШІ
                 }
-                    
-            }    
+                else if (type == dlink::PKT_AMMO) {
+                    std::memcpy(&m_rawAmmo, payload,sizeof(m_rawAmmo));
+                    m_hasAmmo = true;
+                }
+                else if (type == dlink::PKT_TARGET) {
+                    std::memcpy(&m_rawTarget, payload,sizeof(m_rawTarget));
+                    m_hasTarget = true;
+                }
+                else if (type == dlink::PKT_CONFIG) {
+                    std::memcpy(&m_rawConfig, payload,sizeof(m_rawConfig));
+                    m_hasConfig = true;
+                }
+            }
         }
-        usleep(1000);
+        else {
+            usleep(1000);// Захист CPU від 100% завантаження, якщо в UART порожньо
+        }
     }
 }
 
@@ -107,7 +114,6 @@ Target DroneLink::getTarget() {
     target.pos.y = m_rawTarget.y;
     target.velocity.x = m_rawTelemetry.z;
     target.velocity.y = 0.0f;
-    
     return target;
 }
 //Повертаєммо структуру DroneCommand з Common
@@ -127,13 +133,15 @@ void DroneLink::sendCommand(const DroneCommand& cmd) {
     c.turnRate = cmd.angelSpeed;
 
     //Автоматичне пригальмовування на крутих віражах за порогом turnThreshold
-    //float thresh = m_hasConfig ? m_rawConfig.turnThreshold :0.3f;
-    //c.accel = (std::abs(cmd.angelSpeed) > thresh) ? -0.3f : 1.0f;
-    c.accel = 1.0f;
+    float thresh = m_hasConfig ? m_rawConfig.turnThreshold :0.3f;
+    c.accel = (std::abs(cmd.angelSpeed) > thresh) ? -0.3f : 1.0f;
+    //c.accel = 1.0f;
     uint8_t out_buf[64];
     size_t m = dlink::encode(dlink::PKT_CONTROL, &c, sizeof(c), out_buf);
     if (m > 0) {
         write(m_uartFd, out_buf, m);
+        // ВІДНОВЛЕНО: Пробиваємо кеш FIFO ядра Linux для миттєвої доставки команд
+        tcdrain(m_uartFd);
     }
 }
 
