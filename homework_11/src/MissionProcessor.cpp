@@ -92,9 +92,10 @@ void MissionProcessor::run() {
 
         float speed_total = std::hypot(real_vx, real_vy);
         if (speed_total < 0.2f) {
-            speed_total = telemetry.speed.x;
-            real_vx = speed_total * 0.707f;
-            real_vy = -speed_total * 0.707f;
+            speed_total = 0.5f;
+            float startDir = std::atan2(target.pos.y - telemetry.pos.y, target.pos.x - telemetry.pos.x);
+            real_vx = speed_total * std::cos(startDir);
+            real_vy = speed_total * std::sin(startDir);
         }    
         
         float currentDir = std::atan2(real_vy, real_vx);
@@ -111,15 +112,18 @@ void MissionProcessor::run() {
         float dropDistX = m_balisticSolver->calcHDistance(t_fall, real_vx, ammo.mass, ammo.drag, ammo.lift);
         float dropDistY = m_balisticSolver->calcHDistance(t_fall, real_vy, ammo.mass, ammo.drag, ammo.lift);
 
+        float k = ammo.drag;
+        if (k < 0.001f) k = 0.070f; // Защита от нульового опору
+
           // ЛАГ-КОМПЕНСАЦІЯ: Розраховуємо динамічні пороги випередження по кожній осі окремо.
         // Компенсує системну затримку UART/GPIO буфера у 0.28 секунди, не порушуючи базові змінні логів.
         //float optimal_drop_dist_x = dropDistX + (real_vx * 0.28f);
         //float optimal_drop_dist_y = dropDistY + (real_vy * 0.28f);
 
         // СТРАХОВКА: Якщо внутрішній Тейлор злетів на нульових швидкостях, підміняємо на базову фізику
-        if ((dropDistX != dropDistX) || (dropDistY != dropDistY)) {
-            dropDistX = real_vx * t_fall * std::exp(-ammo.drag * t_fall / ammo.mass);
-            dropDistY = real_vy * t_fall * std::exp(-ammo.drag * t_fall / ammo.mass);
+        if (std::isnan(dropDistX) || std::isnan(dropDistY) || std::abs(dropDistX) < 0.01f) {
+            dropDistX = (real_vx * ammo.mass / k) * (1.0f - std::exp(-k * t_fall / ammo.mass));
+            dropDistY = (real_vy * ammo.mass / k) * (1.0f - std::exp(-k * t_fall / ammo.mass));
         }
         // 3. МАТЕМАТИЧНА ЕКСТРАПОЛЯЦІЯ ПОЗИЦІЇ ЦІЛІ (predictedTarget)
         //static float last_target_x = target.pos.x;
@@ -144,7 +148,7 @@ void MissionProcessor::run() {
         currentStep.predictedTarget.y = target.pos.y + target_vy * t_fall;
 
         // Aimpoint tочка, куди приземлиться боєприпас, якщо скинути зараз
-        currentStep.aimPoint.x = telemetry.pos.x + dropDistX + (real_vx * 0.28f);
+        currentStep.aimPoint.x = telemetry.pos.x + dropDistX + (real_vx * 0.05f);
         currentStep.aimPoint.y = telemetry.pos.y + dropDistY + (real_vy * 0.28f);
 
         // Промах розраховується між точкою влучання та ПРОГНОЗОВАНОЮ позицією цілі
@@ -168,15 +172,15 @@ void MissionProcessor::run() {
                                       
         float raw_angle_error = desiredDir - currentDir;
         float angle_error = std::atan2(std::sin(raw_angle_error), std::cos(raw_angle_error));
-        
+        float error_deg = std::abs(angle_error) * (180.0f / M_PI);
         // 5. ТРИГЕР АВТОМАТИЧНОГО СКИДАННЯ
         //float dist_x = std::abs(currentStep.predictedTarget.x - telemetry.pos.x);
         //float dist_y = std::abs(currentStep.predictedTarget.y - telemetry.pos.y);
 
         float hitRadius = m_droneLink->getConfig().hitRadius;
         
-        if (predicted_miss <= (hitRadius + 0.5f) && std::abs(angle_error) < 0.25f) {
-            std::cout << "[AI] TRIGGER ACTIVATED! Скид вантажу за балістичним контуром." << std::endl;
+        if (!m_droneLink->isDropped() && predicted_miss <= (hitRadius * 0.4f) && std::abs(angle_error) < 0.08f) {
+            std::cout << "[AI] TRIGGER ACTIVATED! Скид вантажу за балістичним контуром hitRadius: " << predicted_miss << "м" << std::endl;
             m_droneLink->triggerDrop();
             
         }
@@ -186,16 +190,18 @@ void MissionProcessor::run() {
         
         // 6. КЕРУВАННЯ КУРСОМ ДРОНА
         static float last_angle_error = angle_error;
-        float angle_derivative = angle_error - last_angle_error;
+        float safe_dt = (dt > 0.001f) ? dt : 0.02f;
+        float angle_derivative = (angle_error - last_angle_error) / safe_dt;
         last_angle_error = angle_error; 
-        float turnRate = 6.5f* angle_error + 9.5f * angle_derivative;
+        float turnRate = 6.5f* angle_error + 0.05f * angle_derivative;
         turnRate = std::clamp(turnRate, -1.0f, 1.0f);
 
         // ИСПОЛЬЗУЕМ ОФИЦИАЛЬНЫЙ ENUM ПОСЛЕ ОБНОВЛЕНИЯ COMMON.HPP
         static DroneState current_state = MOVING;
-        float error_deg = std::abs(angle_error) * (180.0f / M_PI);
+        
         if (m_droneLink->isDropped()) {
             current_state = DROPPED;
+            
         }
         switch (current_state) {
             case MOVING:

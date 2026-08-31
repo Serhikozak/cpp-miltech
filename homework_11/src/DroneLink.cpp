@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <iostream>
+#include <thread>
 
 #ifndef SQL_USING_GPIOD
 #define SQL_USING_GPIOD
@@ -147,10 +148,14 @@ void DroneLink::sendCommand(const DroneCommand& cmd) {
 
 void DroneLink::triggerDrop() {
     if (!m_dropped) {
-        gpiod_line_set_value(m_dropLine, 1);
-        usleep(80000);
-        gpiod_line_set_value(m_dropLine, 0);
-        m_dropped = true;
+         m_dropped = true;
+        std::thread([this]() {
+            gpiod_line_set_value(this->m_dropLine, 1);
+            usleep(250000);
+            gpiod_line_set_value(this->m_dropLine, 0);
+            std::cout << "[DroneLink] GPIO LINE 23 TRIGGERED SUCCESSFULLY (250ms)" << std::endl;
+        }).detach();    
+       
     }
 }
     
