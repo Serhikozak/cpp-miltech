@@ -1,11 +1,21 @@
 #pragma once
+#include <cmath>
 
 struct Coord
 {
     float x;
     float y;
 
+    Coord operator+(const Coord& o) const { return { x + o.x, y + o.y }; }
+    Coord operator-(const Coord& o) const { return { x - o.x, y - o.y }; }
+    Coord operator*(float s)        const { return { x * s,    y * s    }; }
+    Coord operator/(float s)        const { return { x / s,    y / s    }; }
+    bool  operator==(const Coord& o) const { return x == o.x && y == o.y; }
 };
+
+inline float length(Coord c)    { return std::hypot(c.x, c.y); } //Computes the square root of the sum of the squares of x and y
+inline Coord normalize(Coord c) { float l = length(c); return l > 1e-6f ? c / l : Coord{0, 0}; }
+
 
 struct Target {
     Coord pos;
